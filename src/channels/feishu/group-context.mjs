@@ -65,6 +65,9 @@ export async function collectGroupContext(groupHistory, anchor, {
       from: lower,
       to: upper,
       limit: Math.max(1, Math.min(100, limit)),
+      // The chatter that matters is the chatter just before the question, so
+      // the bound takes the tail of the window rather than its head.
+      newest: true,
     });
   } catch (error) {
     // An unreadable archive costs the background, never the answer.

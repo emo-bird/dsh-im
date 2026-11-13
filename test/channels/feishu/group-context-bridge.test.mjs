@@ -187,6 +187,60 @@ test('a message from a sender the API cannot name is still archived', async (t) 
   assert.equal(stored.text, '无名氏说了一句');
 });
 
+test('the settings page decides how much background a mention carries', async (t) => {
+  const { store, bridge, prompts, names } = await harness(t);
+  // Three earlier lines, then a mention. The count bound is one, so only the
+  // line closest to the question may reach the prompt.
+  names.set('om_a', '甲');
+  for (const [index, messageId] of ['om_a', 'om_b', 'om_c'].entries()) {
+    await bridge.accept(groupEvent({
+      messageId, text: `第 ${index + 1} 句`, senderOpenId: 'ou_other',
+      sentAt: BASE - 5_000 + index,
+    }));
+  }
+  await store.setContextLimit(1);
+  assert.equal(store.contextLimit, 1, 'the bound reached the archive owner');
+
+  names.set('om_ask', '一门鸽鸽');
+  await bridge.accept(groupEvent({
+    messageId: 'om_ask', text: '@_bot 他们刚才说什么', senderOpenId: 'ou_owner',
+    sentAt: BASE - 1_000,
+    mentions: [{ key: '@_bot', id: { open_id: 'ou_bot' } }],
+  }));
+  assert.equal(prompts.length, 1);
+  const prompt = prompts[0];
+  assert.equal(prompt.includes('第 3 句'), true, 'the closest line is read');
+  assert.equal(prompt.includes('第 1 句'), false, 'the older lines are outside the bound');
+  assert.equal(prompt.includes('第 2 句'), false);
+});
+
+test('a time window narrower than the chatter keeps the old line out', async (t) => {
+  const { store, bridge, prompts, names } = await harness(t);
+  // One line well outside the window, one well inside it.
+  names.set('om_old', '甲');
+  names.set('om_recent', '乙');
+  await bridge.accept(groupEvent({
+    messageId: 'om_old', text: '一小时前的旧话', senderOpenId: 'ou_other',
+    sentAt: BASE - 90_000,
+  }));
+  await bridge.accept(groupEvent({
+    messageId: 'om_recent', text: '刚刚说的一句话', senderOpenId: 'ou_other',
+    sentAt: BASE - 20_000,
+  }));
+  await store.setContextWindowMinutes(1);
+  names.set('om_now', '一门鸽鸽');
+  await bridge.accept(groupEvent({
+    messageId: 'om_now', text: '@_bot 在吗', senderOpenId: 'ou_owner',
+    sentAt: BASE,
+    mentions: [{ key: '@_bot', id: { open_id: 'ou_bot' } }],
+  }));
+  assert.equal(prompts.length, 1);
+  const prompt = prompts[0];
+  assert.equal(prompt.includes('刚刚说的一句话'), true, 'the line inside the window is read');
+  assert.equal(prompt.includes('一小时前的旧话'), false,
+    'a line 90 seconds old is outside a one-minute window');
+});
+
 test('a direct message never picks up group background', async (t) => {
   const { bridge, prompts, names } = await harness(t);
   names.set('om_group_noise', '用户492486');

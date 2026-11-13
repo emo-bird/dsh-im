@@ -7,6 +7,11 @@ import { stageInboundFiles } from './inbound-file.mjs';
 
 export const GROUP_HISTORY_CHANNELS = Object.freeze(['whatsapp', 'feishu', 'telegram', 'discord', 'slack', 'qq']);
 export const DEFAULT_GROUP_HISTORY_DAYS = 14;
+/** How much surrounding chatter an answered group message carries, by default. */
+export const DEFAULT_GROUP_CONTEXT_LIMIT = 20;
+export const MAX_GROUP_CONTEXT_LIMIT = 100;
+export const DEFAULT_GROUP_CONTEXT_WINDOW_MINUTES = 60;
+export const MAX_GROUP_CONTEXT_WINDOW_MINUTES = 1440;
 const DAY = 86_400_000;
 const MAX_FILE_BYTES = 100 * 1024 * 1024;
 
@@ -26,6 +31,23 @@ export function normalizeGroupHistoryDays(value) {
   return Number.isSafeInteger(days) && days > 0 && Number.isSafeInteger(days * DAY) ? days : null;
 }
 
+function positiveInRange(value, max) {
+  if (typeof value !== 'number' && typeof value !== 'string') return null;
+  if (typeof value === 'string' && !/^\d+$/.test(value.trim())) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= max ? parsed : null;
+}
+
+/** How many archived messages an answered group message may quote. */
+export function normalizeGroupContextLimit(value) {
+  return positiveInRange(value, MAX_GROUP_CONTEXT_LIMIT);
+}
+
+/** How far back, in minutes, an answered group message may reach. */
+export function normalizeGroupContextWindowMinutes(value) {
+  return positiveInRange(value, MAX_GROUP_CONTEXT_WINDOW_MINUTES);
+}
+
 function invalid(message) { return Object.assign(new Error(message), { code: 'group-history-invalid' }); }
 function text(value, max = 512) { return typeof value === 'string' ? value.slice(0, max) : ''; }
 function timestamp(value, fallback) {
@@ -43,6 +65,8 @@ export class GroupHistoryStore {
   #db;
   #ready;
   #days = DEFAULT_GROUP_HISTORY_DAYS;
+  #contextLimit = DEFAULT_GROUP_CONTEXT_LIMIT;
+  #contextWindowMinutes = DEFAULT_GROUP_CONTEXT_WINDOW_MINUTES;
   #settingsError = null;
   #maintenance = Promise.resolve();
   #now;
@@ -78,6 +102,12 @@ export class GroupHistoryStore {
       const days = normalizeGroupHistoryDays(data.groupHistoryRetentionDays);
       if (data.version !== 1 || days === null) throw invalid('群记录设置损坏，请重新保存保留天数。');
       this.#days = days;
+      // The two context keys arrived after the first release, so an older file
+      // simply lacks them; a file that carries a bad value keeps the default
+      // instead of failing the whole settings load over an optional field.
+      this.#contextLimit = normalizeGroupContextLimit(data.groupHistoryContextLimit) ?? DEFAULT_GROUP_CONTEXT_LIMIT;
+      this.#contextWindowMinutes = normalizeGroupContextWindowMinutes(data.groupHistoryContextWindowMinutes)
+        ?? DEFAULT_GROUP_CONTEXT_WINDOW_MINUTES;
     } catch (error) {
       if (error.code !== 'ENOENT') this.#settingsError = '群记录设置无法读取，已暂停自动清理，请重新保存保留天数。';
     }
@@ -132,27 +162,68 @@ export class GroupHistoryStore {
 
   async settings() {
     await this.ready();
-    return { groupHistoryRetentionDays: this.#days, ...(this.#settingsError ? { error: this.#settingsError } : {}) };
+    return {
+      groupHistoryRetentionDays: this.#days,
+      groupHistoryContextLimit: this.#contextLimit,
+      groupHistoryContextWindowMinutes: this.#contextWindowMinutes,
+      ...(this.#settingsError ? { error: this.#settingsError } : {}),
+    };
   }
 
-  setRetentionDays(value) {
-    const days = normalizeGroupHistoryDays(value);
-    if (days === null) return Promise.reject(invalid('保留天数必须为正整数。'));
+  /** What an answered group message carries: at most this many messages … */
+  get contextLimit() { return this.#contextLimit; }
+
+  /** … from at most this far back. */
+  get contextWindowMinutes() { return this.#contextWindowMinutes; }
+
+  /**
+   * Write the settings file. Every setter funnels through here so two setters
+   * called in quick succession can never drop the other's value: the body runs
+   * inside the maintenance chain and serialises the whole file each time.
+   */
+  #writeSettings(mutate) {
     const write = this.#maintenance.catch(() => {}).then(async () => {
       await this.ready();
+      const next = mutate({
+        groupHistoryRetentionDays: this.#days,
+        groupHistoryContextLimit: this.#contextLimit,
+        groupHistoryContextWindowMinutes: this.#contextWindowMinutes,
+      });
       const path = join(this.#root, 'general-settings.json');
       const temporary = `${path}.${randomUUID()}.tmp`;
       try {
-        await writeFile(temporary, `${JSON.stringify({ version: 1, groupHistoryRetentionDays: days }, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+        await writeFile(temporary, `${JSON.stringify({ version: 1, ...next }, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
         await rename(temporary, path);
       } finally { await rm(temporary, { force: true }); }
-      this.#days = days;
+      this.#days = next.groupHistoryRetentionDays;
+      this.#contextLimit = next.groupHistoryContextLimit;
+      this.#contextWindowMinutes = next.groupHistoryContextWindowMinutes;
       this.#settingsError = null;
       void this.sweep().catch((error) => this.#warn(error));
       return this.settings();
     });
     this.#maintenance = write;
     return write;
+  }
+
+  setRetentionDays(value) {
+    const days = normalizeGroupHistoryDays(value);
+    if (days === null) return Promise.reject(invalid('保留天数必须为正整数。'));
+    return this.#writeSettings((current) => ({ ...current, groupHistoryRetentionDays: days }));
+  }
+
+  /** How much surrounding chatter an answered group message quotes. */
+  setContextLimit(value) {
+    const limit = normalizeGroupContextLimit(value);
+    if (limit === null) return Promise.reject(invalid('读取条数必须是 1 到 100 的整数。'));
+    return this.#writeSettings((current) => ({ ...current, groupHistoryContextLimit: limit }));
+  }
+
+  /** How far back an answered group message reaches, in minutes. */
+  setContextWindowMinutes(value) {
+    const minutes = normalizeGroupContextWindowMinutes(value);
+    if (minutes === null) return Promise.reject(invalid('读取时间范围必须是 1 到 1440 的整数分钟。'));
+    return this.#writeSettings((current) => ({ ...current, groupHistoryContextWindowMinutes: minutes }));
   }
 
   async capture(entry) {
@@ -271,7 +342,7 @@ export class GroupHistoryStore {
 
   idle() { return this.#active.size || this.#jobs.size ? new Promise((done) => this.#idle.push(done)) : Promise.resolve(); }
 
-  async query(groupId, { kind = 'messages', from, to, keyword = '', cursor, limit = 100 } = {}) {
+  async query(groupId, { kind = 'messages', from, to, keyword = '', cursor, limit = 100, newest = false } = {}) {
     await this.ready();
     if (this.#settingsError) throw invalid(this.#settingsError);
     const group = this.#db.prepare('SELECT * FROM groups WHERE id = ?').get(groupId);
@@ -295,9 +366,12 @@ export class GroupHistoryStore {
     const fields = kind === 'files' ? 'a.*, m.sent_at' : 'm.*';
     const rows = this.#db.prepare(`SELECT ${fields} FROM ${table} WHERE m.group_id = ? AND m.sent_at >= ? AND m.sent_at <= ?
       AND (m.sent_at > ? OR (m.sent_at = ? AND ${id} > ?)) AND instr(lower(${content}), lower(?)) > 0
-      ORDER BY m.sent_at, ${id} LIMIT ?`).all(groupId, lower, upper, after[0], after[0], after[1], text(keyword), limit + 1);
+      ORDER BY m.sent_at ${newest ? 'DESC' : 'ASC'}, ${id} ${newest ? 'DESC' : 'ASC'} LIMIT ?`).all(groupId, lower, upper, after[0], after[0], after[1], text(keyword), limit + 1);
+    // The rows come back in reading order either way: a newest-first read is
+    // reversed here so every caller sees the same ascending sequence.
+    const ordered = newest ? [...rows].reverse() : rows;
     const items = []; let bytes = 0; let last;
-    for (const row of rows.slice(0, limit)) {
+    for (const row of ordered.slice(0, limit)) {
       let item;
       if (kind === 'files') item = { ...attachmentView(row), sentAt: row.sent_at };
       else item = { id: row.id, senderId: row.sender_id, senderName: row.sender_name,
@@ -316,7 +390,8 @@ export class GroupHistoryStore {
     }
     return { groupName: group.name || group.platform_group_id, retentionDays: this.#days,
       recordingStartedAt: group.recording_started_at, from: lower, to: upper, items,
-      nextCursor: last && rows.length > items.length ? Buffer.from(JSON.stringify({ groupId, kind, time: last.sent_at, id: last.id })).toString('base64url') : null,
+      nextCursor: !newest && last && ordered.length > items.length
+        ? Buffer.from(JSON.stringify({ groupId, kind, time: last.sent_at, id: last.id })).toString('base64url') : null,
       coverage: 'Only messages actually received by this plugin; not complete platform history.' };
   }
 

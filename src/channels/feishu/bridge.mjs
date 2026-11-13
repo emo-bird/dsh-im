@@ -5874,11 +5874,21 @@ export class FeishuHarnessBridge {
    */
   async #recentGroupContext(event) {
     if (event?.message?.chat_type !== 'group' || !event.groupHistory) return '';
+    // The archive owner carries the two bounds the general settings page writes;
+    // read them per turn so a saved setting applies to the next answer without a
+    // restart. Absent values fall back to the module defaults.
+    const store = event.groupHistory.store;
+    const limit = Number.isSafeInteger(store?.contextLimit) ? store.contextLimit : undefined;
+    const minutes = Number.isSafeInteger(store?.contextWindowMinutes) ? store.contextWindowMinutes : undefined;
     const entries = await collectGroupContext(event.groupHistory, {
       chatId: event.message.chat_id,
       messageId: event.message.message_id,
       sentAt: Number(event.message.create_time),
-    }, { logger: this.#logger });
+    }, {
+      ...(limit === undefined ? {} : { limit }),
+      ...(minutes === undefined ? {} : { windowMs: minutes * 60_000 }),
+      logger: this.#logger,
+    });
     return groupContextPrefix(entries);
   }
 

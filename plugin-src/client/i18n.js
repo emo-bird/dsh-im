@@ -118,6 +118,16 @@ const EN = Object.freeze({
   "保留天数必须为正整数。": "Retention days must be a positive integer.",
   "无法读取或保存群记录设置，请稍后重试。": "Unable to read or save group history settings. Try again.",
   "群记录设置返回了无法识别的响应。": "Unrecognized group history settings response.",
+  "被 @ 时读取的前文条数": "Messages of group chatter read per mention",
+  "只影响被 @ 或回复的那条回答：机器人会带着群里的前文理解语境，但仍然只回答被 @ 的消息。最多 100 条。":
+    "Applies only to the answer to a mention or reply: the bot reads the surrounding chatter for context and still answers only the mentioning message. At most 100 messages.",
+  "被 @ 时读取前文的时间范围": "Time window of group chatter read per mention",
+  "只取这段时间内的群消息；条数与时间两个上限同时生效。最多 1440 分钟。":
+    "Only group messages inside this window are read; the message count and this window both cap the result. At most 1440 minutes.",
+  "条": "messages",
+  "分钟": "minutes",
+  "读取条数必须是 1 到 100 的整数。": "The message count must be an integer from 1 to 100.",
+  "读取时间范围必须是 1 到 1440 的整数分钟。": "The time window must be an integer number of minutes from 1 to 1440.",
   "扫码会更新现有飞书应用，只增量开通“获取群组中所有消息”权限，不会创建新应用。单独授权采集时保留原来的回复方式；选择响应所有消息时才切换。": "Scanning updates the existing Feishu app with permission to receive all group messages. Separate recording authorization preserves the reply mode; selecting all-message replies changes it.",
   "私聊始终响应；群聊仅处理明确 @当前机器人的消息。也可单独授权采集群消息，保持仅 @ 时回复。": "Direct messages always receive replies; groups require a mention. You can authorize group recording separately below.",
   "需授权 im:message.group_msg；授权采集不改变群回复模式。": "Requires im:message.group_msg. Recording authorization does not change the reply mode.",

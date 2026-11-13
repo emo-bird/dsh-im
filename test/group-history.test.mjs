@@ -109,7 +109,11 @@ test('corrupt retention settings fail closed and can be repaired explicitly', as
   assert.ok((await store.sweep()).error);
   await assert.rejects(store.query('group'), /暂停自动清理/);
   await store.setRetentionDays(30);
-  assert.deepEqual(await store.settings(), { groupHistoryRetentionDays: 30 });
+  assert.deepEqual(await store.settings(), {
+    groupHistoryRetentionDays: 30,
+    groupHistoryContextLimit: 20,
+    groupHistoryContextWindowMinutes: 60,
+  });
 });
 
 test('queries paginate within byte budget and reject cross-group cursors', async (t) => {
@@ -242,4 +246,33 @@ test('settings RPC rejects unknown parameters and persists valid retention', asy
   assert.equal((await rpc('settings.group-history.enable', { groupId, enabled: false })).ok, false);
   assert.equal((await rpc(GROUP_HISTORY_ENDPOINTS.set, { groupHistoryRetentionDays: 0 })).ok, false);
   assert.equal((await rpc(GROUP_HISTORY_ENDPOINTS.get, { groupId })).ok, false);
+});
+
+test('the group context bounds round-trip through the settings page', async (t) => {
+  const { store } = await fixture(t);
+  const rpc = createGroupHistoryRpcHandler(store);
+  const saved = await rpc(GROUP_HISTORY_ENDPOINTS.set, {
+    groupHistoryContextLimit: 5,
+    groupHistoryContextWindowMinutes: 90,
+  });
+  assert.equal(saved.ok, true);
+  assert.equal(saved.value.groupHistoryContextLimit, 5);
+  assert.equal(saved.value.groupHistoryContextWindowMinutes, 90);
+  // The bounds reach the code that reads the archive, not just the settings file.
+  assert.equal(store.contextLimit, 5);
+  assert.equal(store.contextWindowMinutes, 90);
+  // Each bound is validated on its own, and an invalid one leaves the other alone.
+  assert.equal((await rpc(GROUP_HISTORY_ENDPOINTS.set, { groupHistoryContextLimit: 101 })).ok, false);
+  assert.equal((await rpc(GROUP_HISTORY_ENDPOINTS.set, { groupHistoryContextWindowMinutes: 0 })).ok, false);
+  assert.equal(store.contextLimit, 5);
+  assert.equal(store.contextWindowMinutes, 90);
+  // Retention is a sibling key: saving one must not drop the others.
+  const mixed = await rpc(GROUP_HISTORY_ENDPOINTS.set, { groupHistoryRetentionDays: 21 });
+  assert.equal(mixed.value.groupHistoryRetentionDays, 21);
+  assert.equal(mixed.value.groupHistoryContextLimit, 5);
+  // And the values reach the file the next start reads, not just this instance.
+  const written = JSON.parse(await readFile(join(store.root, 'general-settings.json'), 'utf8'));
+  assert.equal(written.groupHistoryContextLimit, 5);
+  assert.equal(written.groupHistoryContextWindowMinutes, 90);
+  assert.equal(written.groupHistoryRetentionDays, 21);
 });
