@@ -1,4 +1,9 @@
 import { captureGroupHistory } from '../shared/group-history.mjs';
+import {
+  collectGroupContext,
+  groupContextPrefix,
+  prependGroupContext,
+} from './group-context.mjs';
 import { BusyMessageDispatcher, canAutomaticallySteer } from '../shared/busy-message-dispatcher.mjs';
 import { isPermissionCommand, runPermissionCommand } from '../shared/permission-command.mjs';
 import { randomUUID } from 'node:crypto';
@@ -147,6 +152,10 @@ const MAX_ROOT_CANDIDATES = 512;
 const MAX_TOPIC_ANCHORS = 4_000;
 /** Conversations remembered as auto-continued-round delivery targets (LRU). */
 const MAX_CONVERSATION_ROUTES = 512;
+/** Sender names cached per open id; a group rarely outgrows this (LRU). */
+const MAX_SENDER_NAMES = 512;
+/** Name lookups kept in flight; beyond this a message is archived unnamed. */
+const MAX_SENDER_NAME_LOOKUPS = 8;
 
 const MENU_COMMAND = /^\/m(?:enu)?$/i;
 const REPAIR_COMMAND_PREFIX = /^\/repair(?:\s|$)/i;
@@ -527,6 +536,21 @@ function senderOpenId(event) {
     ?? nonEmptyString(event?.sender?.sender_id?.user_id);
 }
 
+/**
+ * A display name Feishu happened to attach to the inbound event.
+ *
+ * `im.message.receive_v1` normally carries only `sender.sender_id`, so this is
+ * usually `undefined`; the bridge then resolves the name through the message
+ * API (see `#senderName`). Kept as a separate reader because Feishu has sent
+ * the field on some payload variants, and using it costs nothing.
+ *
+ * @param event - the inbound Feishu event.
+ * @returns the display name, or `undefined` when the event carries none.
+ */
+function senderNameOf(event) {
+  return nonEmptyString(event?.sender?.sender_name);
+}
+
 function strictSenderOpenId(event) {
   return nonEmptyString(event?.sender?.sender_id?.open_id);
 }
@@ -636,6 +660,15 @@ export class FeishuHarnessBridge {
   #groupHistory;
   #groupHistoryScope;
   #accessPolicy;
+  /**
+   * sender open id → display name. Feishu's inbound event carries only
+   * `sender.sender_id`, so the name has to be read back from the message API
+   * once per person and then reused; without this cache every archived row and
+   * every prompt would still say `ou_…` instead of a human.
+   */
+  #senderNames = new Map();
+  /** Names being fetched right now, so one busy sender costs one request. */
+  #senderNameLookups = new Map();
   #queues = new Map();
   #busyMessages = new BusyMessageDispatcher();
   #batchInputs = new BatchInputManager();
@@ -1186,16 +1219,28 @@ export class FeishuHarnessBridge {
     }
   }
 
-  accept(event) {
-    if (!this.#groupHistory || event?.message?.chat_type !== 'group') return this.#accept(event);
+  async accept(event) {
+    if (!this.#groupHistory || event?.message?.chat_type !== 'group') {
+      // Warm the name cache for whoever answers this message, but never wait on
+      // it: acceptance order must not depend on a network round trip.
+      void this.#senderName(event).catch(() => undefined);
+      return this.#accept(event);
+    }
+    // The archive is written once and would stay anonymous forever, so this is
+    // the one path that waits for the name.
+    const senderName = await this.#senderName(event);
     const content = extractInboundMessage({ ...event, message: { ...event.message, mentions: [] } }, this.#client);
     const message = { ...content, kind: 'group', senderId: senderOpenId(event),
-      senderIsBot: isBotSender(event) };
+      senderIsBot: isBotSender(event),
+      // Echoed back through `contextSource`, which is where the archive reads
+      // the author's name from; without it every archived row is anonymous.
+      contextSource: () => ({ senderName }) };
     return captureGroupHistory(this.#groupHistory, message, {
       channel: 'feishu', scope: this.#groupHistoryScope, groupId: event.message.chat_id,
       messageId: event.message.message_id, sentAt: Number(event.message.create_time),
       type: event.message.message_type, text: content.content,
       threadId: event.message.thread_id, replyToMessageId: event.message.parent_id,
+      senderName,
       capability: '需授权 im:message.group_msg；授权采集不改变群回复模式。',
     }, { logger: this.#logger }).then(() => { event.groupHistory = message.groupHistory; return this.#accept(event); });
   }
@@ -1751,6 +1796,7 @@ export class FeishuHarnessBridge {
           () => ({
             channel: 'feishu',
             senderId: senderOpenId(event),
+            senderName: this.#knownSenderName(event),
             chatId: event.message.chat_id,
             threadId: event.message.thread_id,
           }),
@@ -5740,9 +5786,109 @@ export class FeishuHarnessBridge {
     };
   }
 
+  /**
+   * The name already known for this event's sender, without any I/O.
+   *
+   * Prompt building and fast-command handling run on every turn and must not
+   * wait on the message API; by the time a message is answered, `accept` has
+   * normally resolved its sender once and cached the result.
+   *
+   * @param event - the inbound Feishu event.
+   * @returns the cached display name, or `undefined` when it is not known yet.
+   */
+  #knownSenderName(event) {
+    const direct = senderNameOf(event);
+    if (direct) return direct;
+    const openId = senderOpenId(event);
+    return openId ? this.#senderNames.get(openId) : undefined;
+  }
+
+  /**
+   * Resolve who sent this event, once per person.
+   *
+   * Feishu's `im.message.receive_v1` payload carries `sender.sender_id` but not
+   * the display name (verified against the live bot: every archived row stayed
+   * blank while this returned `undefined`). `message.get` with
+   * `with_sender_name: true` does return it and needs no extra scope, so the
+   * bridge reads it back for the message being handled and remembers it per
+   * open id. Failures are logged and treated as "unknown", because a nameless
+   * message is still worth delivering — it just loses the label.
+   *
+   * @param event - the inbound Feishu event.
+   * @returns the display name, or `undefined` when it cannot be determined.
+   */
+  async #senderName(event) {
+    const direct = senderNameOf(event);
+    if (direct) return direct;
+    const openId = senderOpenId(event);
+    const messageId = nonEmptyString(event?.message?.message_id);
+    if (!openId || !messageId) return undefined;
+    const cached = this.#senderNames.get(openId);
+    if (cached) {
+      // Refresh recency so the LRU evicts the people who stopped talking.
+      this.#senderNames.delete(openId);
+      this.#senderNames.set(openId, cached);
+      return cached;
+    }
+    const pending = this.#senderNameLookups.get(openId);
+    if (pending) return pending;
+    // A burst from new people must not turn into a burst of API calls; those
+    // messages are archived unnamed and get named on their next appearance.
+    if (this.#senderNameLookups.size >= MAX_SENDER_NAME_LOOKUPS) return undefined;
+    const lookup = (async () => {
+      try {
+        const response = await this.#client?.im?.v1?.message?.get?.({
+          path: { message_id: messageId },
+          params: { with_sender_name: true },
+        });
+        const items = Array.isArray(response?.data?.items) ? response.data.items : [];
+        const item = items.find((candidate) => nonEmptyString(candidate?.message_id) === messageId) ?? items[0];
+        const name = nonEmptyString(item?.sender?.sender_name);
+        if (!name) return undefined;
+        this.#senderNames.set(openId, name);
+        while (this.#senderNames.size > MAX_SENDER_NAMES) {
+          this.#senderNames.delete(this.#senderNames.keys().next().value);
+        }
+        return name;
+      } catch (error) {
+        this.#logger.warn?.('[dsh-feishu] unable to read the sender name:', error?.message ?? error);
+        return undefined;
+      } finally {
+        this.#senderNameLookups.delete(openId);
+      }
+    })();
+    this.#senderNameLookups.set(openId, lookup);
+    return lookup;
+  }
+
+  /**
+   * Render the group chatter that led up to an addressed message.
+   *
+   * Only addressed messages ever reach here: everything else is archived by
+   * `accept` and dropped by the response-mode gate before any prompt is built.
+   * So the archive is read for the message we are about to answer, never on
+   * behalf of the messages we stay silent for.
+   *
+   * @param event - the inbound Feishu event that triggered a reply.
+   * @returns the rendered context block, or `''` when there is nothing to show.
+   */
+  async #recentGroupContext(event) {
+    if (event?.message?.chat_type !== 'group' || !event.groupHistory) return '';
+    const entries = await collectGroupContext(event.groupHistory, {
+      chatId: event.message.chat_id,
+      messageId: event.message.message_id,
+      sentAt: Number(event.message.create_time),
+    }, { logger: this.#logger });
+    return groupContextPrefix(entries);
+  }
+
   async #preparePrompt(event, key, message) {
     const snapshot = this.#acceptedMessageIds.get(event.message.message_id);
     const originalFiles = Array.isArray(message.files) ? [...message.files] : [];
+    // Background the question was asked against. Read once per turn, on the
+    // path that actually answers: a non-mentioned group message never gets here
+    // (it is archived and dropped), so nothing is collected on its behalf.
+    const background = await this.#recentGroupContext(event);
     const build = async (input) => {
       const rich = hasInboundImages(input) || hasReplyReference(input);
       const original = rich
@@ -5755,11 +5901,15 @@ export class FeishuHarnessBridge {
       const enhanced = enhanceContextContent(original, snapshot, () => ({
         channel: 'feishu',
         senderId: senderOpenId(event),
+        senderName: this.#knownSenderName(event),
         chatId: event.message.chat_id,
         threadId: event.message.thread_id,
       }));
       return {
-        content: rich || enhanced !== original ? enhanced : undefined,
+        // Keep `original` as the base even when nothing was enhanced: group
+        // background hangs off that base, and returning `undefined` here would
+        // drop it on the floor (the caller falls back to the plain message text).
+        content: prependGroupContext(rich || enhanced !== original ? enhanced : original, background),
         contextEnhanced: enhanced !== original,
         sourceGuidance: snapshot?.config?.guidance,
       };
