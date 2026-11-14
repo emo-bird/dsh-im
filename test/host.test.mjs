@@ -448,3 +448,40 @@ test('Host reports aggregate failure only after every channel was attempted', as
   assert.deepEqual(fixture.calls, CHANNELS.map(([channel]) => channel));
   assert.equal(fixture.errors.length, CHANNELS.length);
 });
+
+test('A second host copy adopts the live dshIm service instead of failing the entry', async (t) => {
+  const ctx = new Context();
+  ctx.provide('connection', {
+    fetch: { register: () => async () => {} },
+    rpc: { call: () => {} },
+  });
+  ctx.provide('credentials', {});
+  ctx.provide('typertGateway', { stream() {} });
+  ctx.provide('sessionController', {});
+  ctx.provide('workspaceController', {});
+
+  // A carrier (market/carrier entry) can load the same package next to the
+  // profile's own bundle. The first copy registers the service; the duplicate
+  // must not throw "service \"dshIm\" has been registered".
+  const first = ctx.plugin({
+    name: 'dsh-im-first-copy',
+    async apply(firstCtx) {
+      firstCtx.provide('dshIm', { contractVersion: 1, marker: 'first' });
+    },
+  });
+  t.after(() => first.dispose());
+  await first.await();
+
+  const internals = Object.fromEntries(CHANNELS.map(([, applyName]) => [applyName, async () => {}]));
+  Object.assign(internals, {
+    createDeliveryService: () => ({ async listBots() { return []; } }),
+    installUpdateRpc: () => async () => {},
+    installDeliveryRpc: () => async () => {},
+  });
+
+  const duplicate = ctx.plugin(createImHostPlugin(internals));
+  t.after(() => duplicate.dispose());
+  await duplicate.await();
+
+  assert.equal(ctx.get('dshIm').marker, 'first', 'the first provider keeps the service');
+});

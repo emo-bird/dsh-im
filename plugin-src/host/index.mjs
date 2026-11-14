@@ -136,7 +136,23 @@ export function createImHostPlugin(internals = {}) {
         }
         return described;
       };
-      if (typeof ctx?.provide === 'function') {
+      // A second copy of this package can be loaded by a profile (for example a
+      // market/carrier entry next to the profile's own bundle). Cordis throws
+      // when a service is provided twice, which fails the whole entry and takes
+      // every client plugin on the page with it. Adopt the live instance instead
+      // of registering a duplicate: the first provider keeps the service, and the
+      // duplicate entry still activates its channels.
+      const serviceTaken = (() => {
+        if (typeof ctx?.get !== 'function') return false;
+        try {
+          // Non-strict on purpose: `provide` rejects any store entry, even one
+          // whose fiber is still settling, so the check must be as wide.
+          return ctx.get('dshIm', false) !== undefined;
+        } catch {
+          return false;
+        }
+      })();
+      if (typeof ctx?.provide === 'function' && !serviceTaken) {
         ctx.provide('dshIm', Object.freeze({
           contractVersion: 1,
           receiptVersion: 1,
