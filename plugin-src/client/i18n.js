@@ -1195,6 +1195,17 @@ const EN = Object.freeze({
   '展开思考过程': 'Expand thinking',
   '展开工具摘要': 'Expand tool summaries',
   '仅对实时过程卡生效，任务结束后自动收起。': 'Applies to streaming process cards only. Panels collapse when the task ends.',
+  '@ 信息脱敏': 'Redact mentions',
+  '开启后把被 @ 的人换成占位，只留指令；关闭后保留真实名字。':
+    'On, the person you mentioned becomes a placeholder and only the instruction remains. Off keeps the real name.',
+  '读取前文条数': 'Preceding messages read',
+  '被 @ 时最多向上翻多少条群消息作为背景。':
+    'How many group messages above the question are read as background when the bot is mentioned.',
+  '读取前文时间范围（分钟）': 'Preceding messages time window (minutes)',
+  '只把这个时间窗内说过的话当作背景。':
+    'Only chatter inside this window is read as background.',
+  '请选择是否对 @ 信息脱敏。': 'Choose whether mentions are redacted.',
+  '请输入 1 到 100 之间的整数。': 'Enter an integer from 1 to 100.',
   '请选择实时过程卡面板的展开状态。': 'Choose whether to expand the streaming process card panels.',
   "消息处理方式": "Message handling",
   "排队": "Queue",

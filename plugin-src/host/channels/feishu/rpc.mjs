@@ -35,6 +35,14 @@ import {
   isFeishuStepCardPanels,
   normalizeFeishuStepCardPanels,
 } from '../../../../src/channels/feishu/step-push-mode.mjs';
+import {
+  isFeishuGroupContextLimit,
+  isFeishuGroupContextWindowMinutes,
+  isFeishuMentionRedaction,
+  normalizeFeishuGroupContextLimit,
+  normalizeFeishuGroupContextWindowMinutes,
+  normalizeFeishuMentionRedaction,
+} from '../../../../src/channels/feishu/mention-settings.mjs';
 import { normalizeFeishuVoiceConfig } from '../../../../src/channels/feishu/voice-config.mjs';
 import {
   isSlashPanelConfig,
@@ -322,6 +330,9 @@ function publicBotEntry(entry) {
     conversationDirectoryOverride: normalizeConversationDirectory(source.conversationDirectoryOverride),
     groupResponseMode: normalizeFeishuGroupResponseMode(source.groupResponseMode),
     mentionTopicReply: source.mentionTopicReply !== false,
+    mentionRedaction: normalizeFeishuMentionRedaction(source.mentionRedaction),
+    groupContextLimit: normalizeFeishuGroupContextLimit(source.groupContextLimit),
+    groupContextWindowMinutes: normalizeFeishuGroupContextWindowMinutes(source.groupContextWindowMinutes),
     stepPush: source.stepPush === true,
     stepPushMode: normalizeFeishuStepPushMode(source.stepPushMode),
     stepCardPanels: normalizeFeishuStepCardPanels(source.stepCardPanels),
@@ -512,6 +523,27 @@ function validPayload(endpoint, payload) {
       && typeof payload.mentionTopicReply === 'boolean'
       ? null
       : '请选择是否以话题方式回复。';
+  }
+  if (endpoint === FEISHU_ENDPOINTS.setMentionRedaction) {
+    return hasOnlyKeys(payload, new Set(['botId', 'mentionRedaction']))
+      && safeOpaqueId(payload.botId)
+      && isFeishuMentionRedaction(payload.mentionRedaction)
+      ? null
+      : '请选择是否对 @ 信息脱敏。';
+  }
+  if (endpoint === FEISHU_ENDPOINTS.setGroupContextLimit) {
+    return hasOnlyKeys(payload, new Set(['botId', 'groupContextLimit']))
+      && safeOpaqueId(payload.botId)
+      && isFeishuGroupContextLimit(payload.groupContextLimit)
+      ? null
+      : '读取条数必须是 1 到 100 的整数。';
+  }
+  if (endpoint === FEISHU_ENDPOINTS.setGroupContextWindowMinutes) {
+    return hasOnlyKeys(payload, new Set(['botId', 'groupContextWindowMinutes']))
+      && safeOpaqueId(payload.botId)
+      && isFeishuGroupContextWindowMinutes(payload.groupContextWindowMinutes)
+      ? null
+      : '读取时间范围必须是 1 到 1440 的整数分钟。';
   }
   if (endpoint === FEISHU_ENDPOINTS.setStepPush) {
     return hasOnlyKeys(payload, new Set(['botId', 'stepPush']))
@@ -857,6 +889,30 @@ export function createFeishuRpcHandler(controller, { encodeQr = qrCodeDataUrl } 
         }
         value = await toPublicFeishuStatus(
           await controller.updateMentionTopicReply(payload.botId, payload.mentionTopicReply),
+          { encodeQr: cachedEncodeQr },
+        );
+      } else if (endpoint === FEISHU_ENDPOINTS.setMentionRedaction) {
+        if (typeof controller.updateMentionRedaction !== 'function') {
+          throw new Error('Mention redaction update is unavailable');
+        }
+        value = await toPublicFeishuStatus(
+          await controller.updateMentionRedaction(payload.botId, payload.mentionRedaction),
+          { encodeQr: cachedEncodeQr },
+        );
+      } else if (endpoint === FEISHU_ENDPOINTS.setGroupContextLimit) {
+        if (typeof controller.updateGroupContextLimit !== 'function') {
+          throw new Error('Group context limit update is unavailable');
+        }
+        value = await toPublicFeishuStatus(
+          await controller.updateGroupContextLimit(payload.botId, payload.groupContextLimit),
+          { encodeQr: cachedEncodeQr },
+        );
+      } else if (endpoint === FEISHU_ENDPOINTS.setGroupContextWindowMinutes) {
+        if (typeof controller.updateGroupContextWindowMinutes !== 'function') {
+          throw new Error('Group context window update is unavailable');
+        }
+        value = await toPublicFeishuStatus(
+          await controller.updateGroupContextWindowMinutes(payload.botId, payload.groupContextWindowMinutes),
           { encodeQr: cachedEncodeQr },
         );
       } else if (endpoint === FEISHU_ENDPOINTS.setStepPush) {

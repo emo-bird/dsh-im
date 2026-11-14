@@ -140,6 +140,16 @@ import {
   normalizeFeishuStepPushMode,
   normalizeFeishuStepCardPanels,
 } from './step-push-mode.mjs';
+import {
+  normalizeFeishuGroupContextLimit,
+  normalizeFeishuGroupContextWindowMinutes,
+  normalizeFeishuMentionRedaction,
+} from './mention-settings.mjs';
+import {
+  GROUP_BACKFILL_CAPABILITY,
+  GROUP_BACKFILL_INTERVAL_MS,
+  backfillGroupHistory,
+} from './group-backfill.mjs';
 import { FeishuLiveCot } from './live-cot.mjs';
 
 // Lazily evaluated: t() must run after setImHostLanguage, not at import time.
@@ -149,6 +159,8 @@ const RESOLVED_REPLY_TTL_MS = 30 * 60_000;
 const ROOT_CANDIDATE_TTL_MS = 30 * 60_000;
 /** Bound main-feed roots awaiting a topic so silent drops cannot grow them. */
 const MAX_ROOT_CANDIDATES = 512;
+/** How many chats may remember a sweep timestamp; oldest is evicted first. */
+const MAX_GROUP_SWEEPS = 256;
 const MAX_TOPIC_ANCHORS = 4_000;
 /** Conversations remembered as auto-continued-round delivery targets (LRU). */
 const MAX_CONVERSATION_ROUTES = 512;
@@ -669,6 +681,8 @@ export class FeishuHarnessBridge {
   #senderNames = new Map();
   /** Names being fetched right now, so one busy sender costs one request. */
   #senderNameLookups = new Map();
+  /** chat id → when its archive was last swept from the provider. */
+  #groupSweeps = new Map();
   #queues = new Map();
   #busyMessages = new BusyMessageDispatcher();
   #batchInputs = new BatchInputManager();
@@ -727,6 +741,16 @@ export class FeishuHarnessBridge {
    * session and answers it in the main feed.
    */
   #mentionTopicReply = true;
+  /**
+   * Whether an @-mention is erased before the model reads the text. On (the
+   * default) the key disappears, as it always did; off keeps the speaker's name
+   * so the reader can tell who was addressed.
+   */
+  #mentionRedaction = true;
+  /** How many archived lines an answered group message quotes, at most. */
+  #groupContextLimit = 20;
+  /** … and how far back, in minutes, it may reach. */
+  #groupContextWindowMinutes = 60;
   /** When true, streaming turns push tool calls and interim notes as discrete messages. */
   #stepPush = false;
   /** Step push presentation: discrete posts, a CardKit card, or native live CoT. */
@@ -805,6 +829,9 @@ export class FeishuHarnessBridge {
     botOpenId,
     groupResponseMode = FEISHU_GROUP_RESPONSE_MODES.ALL,
     mentionTopicReply = true,
+    mentionRedaction,
+    groupContextLimit,
+    groupContextWindowMinutes,
     stepPush = false,
     stepPushMode = FEISHU_STEP_PUSH_MODES.POST,
     stepCardPanels,
@@ -868,6 +895,9 @@ export class FeishuHarnessBridge {
     this.#botOpenId = nonEmptyString(botOpenId);
     this.#groupResponseMode = normalizeFeishuGroupResponseMode(groupResponseMode);
     this.#mentionTopicReply = mentionTopicReply !== false;
+    this.#mentionRedaction = normalizeFeishuMentionRedaction(mentionRedaction);
+    this.#groupContextLimit = normalizeFeishuGroupContextLimit(groupContextLimit);
+    this.#groupContextWindowMinutes = normalizeFeishuGroupContextWindowMinutes(groupContextWindowMinutes);
     this.#stepPush = stepPush === true;
     this.#stepPushMode = normalizeFeishuStepPushMode(stepPushMode);
     this.#stepCardPanels = normalizeFeishuStepCardPanels(stepCardPanels);
@@ -1003,6 +1033,18 @@ export class FeishuHarnessBridge {
 
   setMentionTopicReply(value) {
     this.#mentionTopicReply = value !== false;
+  }
+
+  setMentionRedaction(value) {
+    this.#mentionRedaction = normalizeFeishuMentionRedaction(value);
+  }
+
+  setGroupContextLimit(value) {
+    this.#groupContextLimit = normalizeFeishuGroupContextLimit(value);
+  }
+
+  setGroupContextWindowMinutes(value) {
+    this.#groupContextWindowMinutes = normalizeFeishuGroupContextWindowMinutes(value);
   }
 
   setStepPush(value) {
@@ -1235,14 +1277,46 @@ export class FeishuHarnessBridge {
       // Echoed back through `contextSource`, which is where the archive reads
       // the author's name from; without it every archived row is anonymous.
       contextSource: () => ({ senderName }) };
-    return captureGroupHistory(this.#groupHistory, message, {
+    const capture = captureGroupHistory(this.#groupHistory, message, {
       channel: 'feishu', scope: this.#groupHistoryScope, groupId: event.message.chat_id,
       messageId: event.message.message_id, sentAt: Number(event.message.create_time),
       type: event.message.message_type, text: content.content,
       threadId: event.message.thread_id, replyToMessageId: event.message.parent_id,
       senderName,
-      capability: '需授权 im:message.group_msg；授权采集不改变群回复模式。',
-    }, { logger: this.#logger }).then(() => { event.groupHistory = message.groupHistory; return this.#accept(event); });
+      capability: GROUP_BACKFILL_CAPABILITY,
+    }, { logger: this.#logger });
+    // Another bot's words only reach this bot as an event when it is named, so
+    // the archive would otherwise hold one side of the conversation. The sweep
+    // asks Feishu for the chat's recent window instead; it is throttled per chat
+    // and never on the reply path.
+    void capture.then(() => this.#sweepGroup(event)).catch(() => undefined);
+    return capture.then(() => { event.groupHistory = message.groupHistory; return this.#accept(event); });
+  }
+
+  /**
+   * Files the group's recent messages that never arrived as events. Runs at most
+   * once per chat per interval, and only after an arrival proves the bot is
+   * active in that chat.
+   */
+  #sweepGroup(event) {
+    if (this.#groupHistory === null || this.#groupHistory === undefined) return Promise.resolve(0);
+    const chatId = nonEmptyString(event?.message?.chat_id);
+    if (!chatId) return Promise.resolve(0);
+    const now = Date.now();
+    const last = this.#groupSweeps.get(chatId) ?? 0;
+    if (now - last < GROUP_BACKFILL_INTERVAL_MS) return Promise.resolve(0);
+    this.#groupSweeps.set(chatId, now);
+    while (this.#groupSweeps.size > MAX_GROUP_SWEEPS) {
+      this.#groupSweeps.delete(this.#groupSweeps.keys().next().value);
+    }
+    return backfillGroupHistory(this.#client, this.#groupHistory, {
+      chatId,
+      channel: 'feishu',
+      scope: this.#groupHistoryScope,
+      until: now,
+      logger: this.#logger,
+      signal: this.#signal,
+    }).catch(() => 0);
   }
 
   #accept(event) {
@@ -1825,7 +1899,10 @@ export class FeishuHarnessBridge {
       this.#status.messagesReceived += 1;
     }
 
-    const message = extractInboundMessage(event, this.#client);
+    // Only this extraction reaches the model, so it is the one the bot's
+    // redaction setting governs. Command detection and bare-mention checks keep
+    // the historical stripping: a bare mention must stay empty after parsing.
+    const message = extractInboundMessage(event, this.#client, { redact: this.#mentionRedaction });
     let text = message.content;
     let voiceTurnReplyTo = null;
     // 语音输入(渠道能力):音频消息先转写成文字并写回 message.content——
@@ -5874,19 +5951,16 @@ export class FeishuHarnessBridge {
    */
   async #recentGroupContext(event) {
     if (event?.message?.chat_type !== 'group' || !event.groupHistory) return '';
-    // The archive owner carries the two bounds the general settings page writes;
-    // read them per turn so a saved setting applies to the next answer without a
-    // restart. Absent values fall back to the module defaults.
-    const store = event.groupHistory.store;
-    const limit = Number.isSafeInteger(store?.contextLimit) ? store.contextLimit : undefined;
-    const minutes = Number.isSafeInteger(store?.contextWindowMinutes) ? store.contextWindowMinutes : undefined;
+    // The bounds belong to the bot, not to the archive: two bots in one group
+    // usually want different amounts of background. Read them per turn so a
+    // saved setting applies to the next answer without a restart.
     const entries = await collectGroupContext(event.groupHistory, {
       chatId: event.message.chat_id,
       messageId: event.message.message_id,
       sentAt: Number(event.message.create_time),
     }, {
-      ...(limit === undefined ? {} : { limit }),
-      ...(minutes === undefined ? {} : { windowMs: minutes * 60_000 }),
+      limit: this.#groupContextLimit,
+      windowMs: this.#groupContextWindowMinutes * 60_000,
       logger: this.#logger,
     });
     return groupContextPrefix(entries);

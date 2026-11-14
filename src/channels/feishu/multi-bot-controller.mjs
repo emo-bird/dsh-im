@@ -26,6 +26,14 @@ import {
 } from './step-push-mode.mjs';
 import { normalizeFeishuVoiceConfig } from './voice-config.mjs';
 import {
+  isFeishuGroupContextLimit,
+  isFeishuGroupContextWindowMinutes,
+  isFeishuMentionRedaction,
+  normalizeFeishuGroupContextLimit,
+  normalizeFeishuGroupContextWindowMinutes,
+  normalizeFeishuMentionRedaction,
+} from './mention-settings.mjs';
+import {
   isSlashPanelConfig,
   normalizeSlashPanelConfig,
 } from './slash-command-panel.mjs';
@@ -106,6 +114,9 @@ function configuredBotFingerprint(config) {
     activated: config.activated,
     groupResponseMode: normalizeFeishuGroupResponseMode(config.groupResponseMode),
     mentionTopicReply: config.mentionTopicReply !== false,
+    mentionRedaction: normalizeFeishuMentionRedaction(config.mentionRedaction),
+    groupContextLimit: normalizeFeishuGroupContextLimit(config.groupContextLimit),
+    groupContextWindowMinutes: normalizeFeishuGroupContextWindowMinutes(config.groupContextWindowMinutes),
     stepPush: config.stepPush === true,
     stepPushMode: normalizeFeishuStepPushMode(config.stepPushMode),
     stepCardPanels: normalizeFeishuStepCardPanels(config.stepCardPanels),
@@ -789,6 +800,48 @@ export class MultiBotDshFeishuController {
     }));
   }
 
+  async updateMentionRedaction(botId, mentionRedaction) {
+    this.#assertOpen();
+    if (!isFeishuMentionRedaction(mentionRedaction)) {
+      throw new TypeError('Invalid Feishu mention redaction flag');
+    }
+    return this.#serializeConfig(() => this.#withBotTransition(botId, async () => {
+      const config = this.#requireBot(botId);
+      const saved = await this.#configStore.saveBot({ ...config, mentionRedaction });
+      this.#runtimes.get(botId)?.setMentionRedaction?.(saved.mentionRedaction);
+      this.#touch();
+      return this.status(botId);
+    }));
+  }
+
+  async updateGroupContextLimit(botId, groupContextLimit) {
+    this.#assertOpen();
+    if (!isFeishuGroupContextLimit(groupContextLimit)) {
+      throw new TypeError('Invalid Feishu group context limit');
+    }
+    return this.#serializeConfig(() => this.#withBotTransition(botId, async () => {
+      const config = this.#requireBot(botId);
+      const saved = await this.#configStore.saveBot({ ...config, groupContextLimit });
+      this.#runtimes.get(botId)?.setGroupContextLimit?.(saved.groupContextLimit);
+      this.#touch();
+      return this.status(botId);
+    }));
+  }
+
+  async updateGroupContextWindowMinutes(botId, groupContextWindowMinutes) {
+    this.#assertOpen();
+    if (!isFeishuGroupContextWindowMinutes(groupContextWindowMinutes)) {
+      throw new TypeError('Invalid Feishu group context window');
+    }
+    return this.#serializeConfig(() => this.#withBotTransition(botId, async () => {
+      const config = this.#requireBot(botId);
+      const saved = await this.#configStore.saveBot({ ...config, groupContextWindowMinutes });
+      this.#runtimes.get(botId)?.setGroupContextWindowMinutes?.(saved.groupContextWindowMinutes);
+      this.#touch();
+      return this.status(botId);
+    }));
+  }
+
   async updateSlashPanel(botId, slashPanel) {
     this.#assertOpen();
     if (!isSlashPanelConfig(slashPanel)) {
@@ -930,6 +983,9 @@ export class MultiBotDshFeishuController {
         configured: true,
         groupResponseMode: normalizeFeishuGroupResponseMode(config.groupResponseMode),
         mentionTopicReply: config.mentionTopicReply !== false,
+        mentionRedaction: normalizeFeishuMentionRedaction(config.mentionRedaction),
+        groupContextLimit: normalizeFeishuGroupContextLimit(config.groupContextLimit),
+        groupContextWindowMinutes: normalizeFeishuGroupContextWindowMinutes(config.groupContextWindowMinutes),
         stepPush: config.stepPush === true,
         stepPushMode: normalizeFeishuStepPushMode(config.stepPushMode),
         stepCardPanels: normalizeFeishuStepCardPanels(config.stepCardPanels),

@@ -3,6 +3,11 @@ import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { normalizeFeishuGroupResponseMode } from './group-response-mode.mjs';
 import { normalizeFeishuStepPushMode, normalizeFeishuStepCardPanels } from './step-push-mode.mjs';
+import {
+  normalizeFeishuGroupContextLimit,
+  normalizeFeishuGroupContextWindowMinutes,
+  normalizeFeishuMentionRedaction,
+} from './mention-settings.mjs';
 import { normalizeFeishuVoiceConfig } from './voice-config.mjs';
 import { normalizeSlashPanelConfig } from './slash-command-panel.mjs';
 
@@ -50,6 +55,9 @@ function normalizeBot(value, { legacy = false } = {}) {
     activated: value.activated ?? null,
     groupResponseMode: normalizeFeishuGroupResponseMode(value.groupResponseMode),
     mentionTopicReply: value.mentionTopicReply !== false,
+    mentionRedaction: normalizeFeishuMentionRedaction(value.mentionRedaction),
+    groupContextLimit: normalizeFeishuGroupContextLimit(value.groupContextLimit),
+    groupContextWindowMinutes: normalizeFeishuGroupContextWindowMinutes(value.groupContextWindowMinutes),
     stepPush: value.stepPush === true,
     stepPushMode: normalizeFeishuStepPushMode(value.stepPushMode),
     stepCardPanels: normalizeFeishuStepCardPanels(value.stepCardPanels),

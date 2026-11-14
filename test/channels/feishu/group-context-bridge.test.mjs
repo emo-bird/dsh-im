@@ -188,7 +188,7 @@ test('a message from a sender the API cannot name is still archived', async (t) 
 });
 
 test('the settings page decides how much background a mention carries', async (t) => {
-  const { store, bridge, prompts, names } = await harness(t);
+  const { bridge, prompts, names } = await harness(t);
   // Three earlier lines, then a mention. The count bound is one, so only the
   // line closest to the question may reach the prompt.
   names.set('om_a', '甲');
@@ -198,8 +198,7 @@ test('the settings page decides how much background a mention carries', async (t
       sentAt: BASE - 5_000 + index,
     }));
   }
-  await store.setContextLimit(1);
-  assert.equal(store.contextLimit, 1, 'the bound reached the archive owner');
+  bridge.setGroupContextLimit(1);
 
   names.set('om_ask', '一门鸽鸽');
   await bridge.accept(groupEvent({
@@ -215,7 +214,7 @@ test('the settings page decides how much background a mention carries', async (t
 });
 
 test('a time window narrower than the chatter keeps the old line out', async (t) => {
-  const { store, bridge, prompts, names } = await harness(t);
+  const { bridge, prompts, names } = await harness(t);
   // One line well outside the window, one well inside it.
   names.set('om_old', '甲');
   names.set('om_recent', '乙');
@@ -227,7 +226,7 @@ test('a time window narrower than the chatter keeps the old line out', async (t)
     messageId: 'om_recent', text: '刚刚说的一句话', senderOpenId: 'ou_other',
     sentAt: BASE - 20_000,
   }));
-  await store.setContextWindowMinutes(1);
+  bridge.setGroupContextWindowMinutes(1);
   names.set('om_now', '一门鸽鸽');
   await bridge.accept(groupEvent({
     messageId: 'om_now', text: '@_bot 在吗', senderOpenId: 'ou_owner',

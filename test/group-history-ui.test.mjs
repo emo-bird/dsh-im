@@ -54,7 +54,7 @@ test('General tab configures sidebar and retention and retains Attachments navig
   let renderer;
   await act(async () => { renderer = create(React.createElement(GlobalSettingsPanel, { rpcCall })); });
   const inputs = () => renderer.root.findAllByProps({ type: 'number' });
-  assert.deepEqual(inputs().map((node) => node.props.value), ['14', '20', '60']);
+  assert.deepEqual(inputs().map((node) => node.props.value), ['14'], 'the context bounds belong to each bot, not this page');
   const input = () => inputs()[0];
   assert.equal(renderer.root.findAllByProps({ role: 'switch' }).length, 0);
   assert.equal(renderer.root.findAllByProps({ className: 'dim-groupHistoryList' }).length, 0);
@@ -68,7 +68,7 @@ test('General tab configures sidebar and retention and retains Attachments navig
   assert.equal(calls.filter((call) => call.endpoint.endsWith('.set')).length, 0);
   await act(async () => { input().props.onChange({ target: { value: '30' } }); });
   await act(async () => { await form().props.onSubmit({ preventDefault() {} }); });
-  assert.deepEqual(calls.at(-1), { endpoint: 'settings.group-history.set', payload: { groupHistoryRetentionDays: 30, groupHistoryContextLimit: 20, groupHistoryContextWindowMinutes: 60 } });
+  assert.deepEqual(calls.at(-1), { endpoint: 'settings.group-history.set', payload: { groupHistoryRetentionDays: 30 } });
   await act(async () => { renderer.root.findByProps({ id: 'dim-general-settings-tab-attachments' }).props.onClick(); });
   assert.equal(renderer.root.findByProps({ id: 'dim-globalTtlInput' }).props.value, '24');
   act(() => renderer.unmount());

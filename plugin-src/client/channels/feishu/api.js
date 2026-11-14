@@ -15,6 +15,11 @@ import { normalizeLastMessageError } from "../../last-message-error.js";
 import { normalizeAccessPolicy } from "../../../../src/channels/shared/access-policy.mjs";
 import { normalizeContextEnhancementConfig } from "../../../../src/channels/shared/context-enhancement.mjs";
 import { normalizeFeishuStepPushMode, normalizeFeishuStepCardPanels } from "../../../../src/channels/feishu/step-push-mode.mjs";
+import {
+  normalizeFeishuGroupContextLimit,
+  normalizeFeishuGroupContextWindowMinutes,
+  normalizeFeishuMentionRedaction,
+} from "../../../../src/channels/feishu/mention-settings.mjs";
 import { normalizeFeishuVoiceConfig } from "../../../../src/channels/feishu/voice-config.mjs";
 import { normalizeSlashPanelConfig } from "../../../../src/channels/feishu/slash-command-panel.mjs";
 import { normalizeConversationDirectory } from "../../../../src/channels/shared/conversation-directory.mjs";
@@ -43,6 +48,9 @@ export const FEISHU_ENDPOINTS = Object.freeze({
   setAlias: 'bot.alias.set',
   setGroupResponseMode: "bot.group-response-mode.set",
   setMentionTopicReply: "bot.mention-topic-reply.set",
+  setMentionRedaction: "bot.mention-redaction.set",
+  setGroupContextLimit: "bot.group-context-limit.set",
+  setGroupContextWindowMinutes: "bot.group-context-window-minutes.set",
   setStepPush: "bot.step-push.set",
   setStepPushMode: "bot.step-push-mode.set",
   setStepCardPanels: "bot.step-card-panels.set",
@@ -237,6 +245,9 @@ export function normalizeBotConnection(value, fallbackBotId) {
       : {}),
     groupResponseMode: normalizeGroupResponseMode(value.groupResponseMode),
     mentionTopicReply: value.mentionTopicReply !== false,
+    mentionRedaction: normalizeFeishuMentionRedaction(value.mentionRedaction),
+    groupContextLimit: normalizeFeishuGroupContextLimit(value.groupContextLimit),
+    groupContextWindowMinutes: normalizeFeishuGroupContextWindowMinutes(value.groupContextWindowMinutes),
     stepPush: value.stepPush === true,
     stepPushMode: normalizeFeishuStepPushMode(value.stepPushMode),
     stepCardPanels: normalizeFeishuStepCardPanels(value.stepCardPanels),

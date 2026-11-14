@@ -95,20 +95,32 @@ function parsedMessageContent(event) {
   }
 }
 
-function withoutMentions(text, event) {
+/**
+ * @param {{ redact?: boolean }} [options] Redaction is on unless a bot turns it
+ *   off: on, a mention key disappears exactly as it always has; off, the key
+ *   becomes the mentioned person's display name so the reader can tell who was
+ *   addressed.
+ */
+function withoutMentions(text, event, { redact = true } = {}) {
   let result = typeof text === 'string' ? text : '';
   for (const mention of event?.message?.mentions ?? []) {
     if (typeof mention?.key === 'string' && mention.key) {
-      result = result.replaceAll(mention.key, '');
+      const replacement = redact ? '' : mentionReplacement(mention);
+      result = result.replaceAll(mention.key, replacement);
     }
   }
   return result.trim();
 }
 
-export function extractText(event) {
+function mentionReplacement(mention) {
+  const name = typeof mention?.name === 'string' ? mention.name.trim() : '';
+  return name ? `@${name}` : mention.key;
+}
+
+export function extractText(event, options) {
   if (event?.message?.message_type !== 'text') return null;
   const parsed = parsedMessageContent(event);
-  return parsed ? withoutMentions(parsed.text, event) : null;
+  return parsed ? withoutMentions(parsed.text, event, options) : null;
 }
 
 function nonEmptyString(value) {
@@ -233,12 +245,12 @@ function interactiveCardText(parsed) {
   return [title, content].filter(Boolean).join('\n');
 }
 
-function postContent(event, parsed = parsedMessageContent(event)) {
+function postContent(event, parsed = parsedMessageContent(event), options) {
   if (event?.message?.message_type !== 'post') return null;
   if (!parsed) return null;
 
   const lines = [];
-  const title = nonEmptyString(withoutMentions(parsed.title, event));
+  const title = nonEmptyString(withoutMentions(parsed.title, event, options));
   if (title) lines.push(title);
   const imageKeys = [];
   for (const paragraph of Array.isArray(parsed.content) ? parsed.content : []) {
@@ -253,7 +265,7 @@ function postContent(event, parsed = parsedMessageContent(event)) {
         if (typeof element?.text === 'string') visibleText += element.text;
       }
     }
-    const line = nonEmptyString(withoutMentions(visibleText, event));
+    const line = nonEmptyString(withoutMentions(visibleText, event, options));
     if (line) lines.push(line);
   }
 
@@ -484,7 +496,7 @@ function feishuReplyAttachments(messageType, parsed, post) {
   return [];
 }
 
-function feishuReplyReference(event, client) {
+function feishuReplyReference(event, client, options) {
   const messageId = feishuReplyTargetId(event);
   if (!messageId) return null;
   const chatId = nonEmptyString(event?.message?.chat_id);
@@ -535,8 +547,8 @@ function feishuReplyReference(event, client) {
         },
       };
       const parsed = parsedMessageContent(quotedEvent);
-      const post = postContent(quotedEvent, parsed);
-      const quoted = extractInboundMessage(quotedEvent, client);
+      const post = postContent(quotedEvent, parsed, options);
+      const quoted = extractInboundMessage(quotedEvent, client, options);
       const content = messageType === 'interactive'
         ? interactiveCardText(parsed)
         : quoted.content;
@@ -558,16 +570,16 @@ function feishuReplyReference(event, client) {
   };
 }
 
-export function extractInboundMessage(event, client) {
+export function extractInboundMessage(event, client, options) {
   const messageType = event?.message?.message_type;
   const parsed = parsedMessageContent(event);
-  const post = postContent(event, parsed);
+  const post = postContent(event, parsed, options);
   const standaloneImageKey = messageType === 'image'
     ? nonEmptyString(parsed?.image_key)
     : null;
   const imageKeys = standaloneImageKey ? [standaloneImageKey] : post?.imageKeys ?? [];
   const file = messageType === 'file' ? feishuFileSource(event, client, parsed) : null;
-  const replyTo = feishuReplyReference(event, client);
+  const replyTo = feishuReplyReference(event, client, options);
   // A forwarded card arrives as `interactive`. Without this branch its text was
   // dropped entirely, so the message looked empty and the reader got the
   // "text, image and file only" notice — even though the same extraction is
@@ -575,7 +587,7 @@ export function extractInboundMessage(event, client) {
   const cardText = messageType === 'interactive' ? interactiveCardText(parsed) : '';
   return {
     content: messageType === 'text'
-      ? extractText(event) ?? ''
+      ? extractText(event, options) ?? ''
       : messageType === 'interactive'
         ? cardText
         : post?.text ?? '',

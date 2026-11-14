@@ -6,6 +6,11 @@ import { cardActionProbeCard } from './feishu-cards.mjs';
 import { VerifiedFeishuChannel, waitForFeishuOperation } from './feishu-channel.mjs';
 import { normalizeFeishuGroupResponseMode } from './group-response-mode.mjs';
 import { normalizeFeishuStepPushMode, normalizeFeishuStepCardPanels } from './step-push-mode.mjs';
+import {
+  normalizeFeishuGroupContextLimit,
+  normalizeFeishuGroupContextWindowMinutes,
+  normalizeFeishuMentionRedaction,
+} from './mention-settings.mjs';
 import { createVoice } from './voice.mjs';
 import {
   syncSlashCommands,
@@ -117,6 +122,9 @@ export class FeishuRuntime {
   #botOpenId;
   #groupResponseMode;
   #mentionTopicReply;
+  #mentionRedaction;
+  #groupContextLimit;
+  #groupContextWindowMinutes;
   #stepPush;
   #stepPushMode;
   #stepCardPanels;
@@ -173,6 +181,9 @@ export class FeishuRuntime {
     botOpenId,
     groupResponseMode,
     mentionTopicReply = true,
+    mentionRedaction,
+    groupContextLimit,
+    groupContextWindowMinutes,
     stepPush = false,
     stepPushMode = 'post',
     stepCardPanels,
@@ -218,6 +229,9 @@ export class FeishuRuntime {
     this.#botOpenId = nonEmptyString(botOpenId);
     this.#groupResponseMode = normalizeFeishuGroupResponseMode(groupResponseMode);
     this.#mentionTopicReply = mentionTopicReply !== false;
+    this.#mentionRedaction = normalizeFeishuMentionRedaction(mentionRedaction);
+    this.#groupContextLimit = normalizeFeishuGroupContextLimit(groupContextLimit);
+    this.#groupContextWindowMinutes = normalizeFeishuGroupContextWindowMinutes(groupContextWindowMinutes);
     this.#stepPush = stepPush === true;
     this.#stepPushMode = normalizeFeishuStepPushMode(stepPushMode);
     this.#stepCardPanels = normalizeFeishuStepCardPanels(stepCardPanels);
@@ -264,6 +278,21 @@ export class FeishuRuntime {
   setMentionTopicReply(value) {
     this.#mentionTopicReply = value !== false;
     this.#bridge?.setMentionTopicReply(this.#mentionTopicReply);
+  }
+
+  setMentionRedaction(value) {
+    this.#mentionRedaction = normalizeFeishuMentionRedaction(value);
+    this.#bridge?.setMentionRedaction(this.#mentionRedaction);
+  }
+
+  setGroupContextLimit(value) {
+    this.#groupContextLimit = normalizeFeishuGroupContextLimit(value);
+    this.#bridge?.setGroupContextLimit(this.#groupContextLimit);
+  }
+
+  setGroupContextWindowMinutes(value) {
+    this.#groupContextWindowMinutes = normalizeFeishuGroupContextWindowMinutes(value);
+    this.#bridge?.setGroupContextWindowMinutes(this.#groupContextWindowMinutes);
   }
 
   setStepPush(value) {
@@ -390,6 +419,9 @@ export class FeishuRuntime {
         botOpenId: this.#botOpenId,
         groupResponseMode: this.#groupResponseMode,
         mentionTopicReply: this.#mentionTopicReply,
+        mentionRedaction: this.#mentionRedaction,
+        groupContextLimit: this.#groupContextLimit,
+        groupContextWindowMinutes: this.#groupContextWindowMinutes,
         stepPush: this.#stepPush,
         stepPushMode: this.#stepPushMode,
         stepCardPanels: this.#stepCardPanels,

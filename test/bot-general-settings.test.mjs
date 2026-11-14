@@ -57,7 +57,7 @@ test('Feishu panel switches read legacy defaults without writing and save indepe
     return { ok: true, value: { bots: [{ botId: 'one', busyMessageMode: 'steer', stepPush: false, stepPushMode: 'post', stepCardPanels: panels }] } };
   }, { channel: 'feishu' });
   const switches = () => view.root.findAllByProps({ role: 'switch' });
-  assert.deepEqual(switches().map((node) => node.props.checked), [false, true]);
+  assert.deepEqual(switches().map((node) => node.props.checked), [false, true, true]);
   assert.deepEqual(calls, [{ endpoint: 'connection.status', payload: {} }]);
   assert.equal(view.root.findByType('select').props.value, 'steer');
   assert.equal(switches()[0].props.disabled, false, 'can configure before using streaming cards');
@@ -67,7 +67,7 @@ test('Feishu panel switches read legacy defaults without writing and save indepe
     { botId: 'one', stepCardPanels: { thinkingExpanded: true, toolsExpanded: true } },
     { botId: 'one', stepCardPanels: { thinkingExpanded: true, toolsExpanded: false } },
   ]);
-  assert.deepEqual(switches().map((node) => node.props.checked), [true, false]);
+  assert.deepEqual(switches().map((node) => node.props.checked), [true, false, true]);
   assert.equal(view.root.findByType('select').props.value, 'steer');
   assert.equal(view.root.findAllByType('button').length, 0);
   for (const input of switches()) {
@@ -88,7 +88,7 @@ test('Feishu panel save failure rolls back both values and pending saves block r
   }, { channel: 'feishu' });
   const switches = () => view.root.findAllByProps({ role: 'switch' });
   await act(async () => switches()[1].props.onChange({ target: { checked: false } }));
-  assert.deepEqual(switches().map((node) => node.props.checked), [false, true]);
+  assert.deepEqual(switches().map((node) => node.props.checked), [false, true, true]);
   assert.match(text(view.root.findByProps({ role: 'alert' })), /disk full/);
   fail = false;
   await act(async () => switches()[1].props.onChange({ target: { checked: false } }));
@@ -96,7 +96,7 @@ test('Feishu panel save failure rolls back both values and pending saves block r
   await act(async () => switches()[0].props.onChange({ target: { checked: true } }));
   assert.equal(writes, 2);
   await act(async () => finish());
-  assert.deepEqual(switches().map((node) => node.props.checked), [false, false]);
+  assert.deepEqual(switches().map((node) => node.props.checked), [false, false, true]);
   assert.equal(view.root.findAllByProps({ role: 'alert' }).length, 0);
 });
 
@@ -115,14 +115,15 @@ test('Feishu panel labels translate and late saves cannot change another bot', a
   let finish;
   const view = await mount(t, async (endpoint) => endpoint === 'connection.status'
     ? result('one', 'queue') : new Promise((resolve) => { finish = resolve; }), { channel: 'feishu' });
-  assert.deepEqual(view.root.findAllByProps({ role: 'switch' }).map((node) => node.props['aria-label']), ['Expand thinking', 'Expand tool summaries']);
+  assert.deepEqual(view.root.findAllByProps({ role: 'switch' }).map((node) => node.props['aria-label']),
+    ['Expand thinking', 'Expand tool summaries', 'Redact mentions']);
   await act(async () => view.root.findAllByProps({ role: 'switch' })[0].props.onChange({ target: { checked: true } }));
   await act(async () => view.update(React.createElement(BotGeneralSettingsPage, {
     key: 'two', channel: 'feishu', account: { botId: 'two' },
     rpcCall: async () => ({ ok: true, value: { bots: [{ botId: 'two', stepCardPanels: { thinkingExpanded: false, toolsExpanded: false } }] } }),
   })));
   await act(async () => finish({ ok: true, value: { bots: [{ botId: 'one', stepCardPanels: { thinkingExpanded: true, toolsExpanded: true } }] } }));
-  assert.deepEqual(view.root.findAllByProps({ role: 'switch' }).map((node) => node.props.checked), [false, false]);
+  assert.deepEqual(view.root.findAllByProps({ role: 'switch' }).map((node) => node.props.checked), [false, false, true]);
 });
 
 test('failed initial load cannot overwrite server settings and can be retried', async (t) => {
