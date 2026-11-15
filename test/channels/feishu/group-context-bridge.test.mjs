@@ -129,6 +129,37 @@ test('the archive records who spoke, not just their open id', async (t) => {
   assert.deepEqual(lookups, ['om_first'], 'one lookup for one unknown sender');
 });
 
+test('the archive keeps the names behind a mention instead of the placeholders', async (t) => {
+  const { store, groupId, bridge, names } = await harness(t);
+  names.set('om_named', '一门鸽鸽');
+  await bridge.accept(groupEvent({
+    messageId: 'om_named', text: '@_user_1 @_user_2 都对', senderOpenId: 'ou_owner',
+    sentAt: BASE - 1_000,
+    mentions: [
+      { key: '@_user_1', name: '甲' },
+      { key: '@_user_2', name: '乙' },
+    ],
+  }));
+  const page = await store.query(groupId, { limit: 10 });
+  const stored = page.items.find((item) => item.senderId === 'ou_owner');
+  assert.ok(stored, 'the message was archived');
+  assert.equal(stored.text, '@甲 @乙 都对', 'the archive reads as prose, not as placeholders');
+});
+
+test('the redaction switch never reaches the archive', async (t) => {
+  const { store, groupId, bridge, names } = await harness(t);
+  bridge.setMentionRedaction(false);
+  names.set('om_leaky', '一门鸽鸽');
+  await bridge.accept(groupEvent({
+    messageId: 'om_leaky', text: '@_user_1 你看', senderOpenId: 'ou_owner',
+    sentAt: BASE - 1_000,
+    mentions: [{ key: '@_user_1', name: '甲' }],
+  }));
+  const page = await store.query(groupId, { limit: 10 });
+  const stored = page.items.find((item) => item.senderId === 'ou_owner');
+  assert.equal(stored.text, '@甲 你看', 'the archive stores the name whatever the model switch says');
+});
+
 test('an addressed message answers with the group chatter that led up to it', async (t) => {
   const { bridge, prompts, names } = await harness(t);
   names.set('om_noise', '用户492486');

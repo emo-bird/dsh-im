@@ -1271,7 +1271,11 @@ export class FeishuHarnessBridge {
     // The archive is written once and would stay anonymous forever, so this is
     // the one path that waits for the name.
     const senderName = await this.#senderName(event);
-    const content = extractInboundMessage({ ...event, message: { ...event.message, mentions: [] } }, this.#client);
+    // The archive is the record of what the group actually said, so mentions are
+    // resolved to display names here instead of being dropped: a stored
+    // `@_user_1` placeholder is unreadable to anyone reading it back later. The
+    // redaction switch only governs what reaches the model, never the archive.
+    const content = extractInboundMessage(event, this.#client, { redact: false });
     const message = { ...content, kind: 'group', senderId: senderOpenId(event),
       senderIsBot: isBotSender(event),
       // Echoed back through `contextSource`, which is where the archive reads
